@@ -6,6 +6,15 @@ use crate::config::{MergeOptions, PutOptions};
 use crate::error::{Error, SlateDbError};
 use crate::validation::{validate_key, validate_key_value};
 
+/// A single key/value entry for [`WriteBatch::put_many`].
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct PutEntry {
+    /// Row key.
+    pub key: Vec<u8>,
+    /// Row value bytes.
+    pub value: Vec<u8>,
+}
+
 /// Mutable batch of write operations applied atomically by [`crate::Db::write`].
 ///
 /// A batch is single-use once submitted to the database.
@@ -45,6 +54,19 @@ impl WriteBatch {
         validate_key_value(&key, &value)?;
         self.with_open(|batch| batch.put(key, value))
             .map_err(Into::into)
+    }
+
+    /// Appends many put operations to the batch in one call.
+    pub fn put_many(&self, entries: Vec<PutEntry>) -> Result<(), Error> {
+        for entry in &entries {
+            validate_key_value(&entry.key, &entry.value)?;
+        }
+        self.with_open(|batch| {
+            for entry in entries {
+                batch.put(entry.key, entry.value);
+            }
+        })
+        .map_err(Into::into)
     }
 
     /// Appends a put operation with custom put options.

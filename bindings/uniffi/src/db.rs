@@ -9,7 +9,7 @@ use crate::db_status_subscription::DbStatusSubscription;
 use crate::db_transaction::DbTransaction;
 use crate::error::Error;
 use crate::iterator::DbIterator;
-use crate::types::{CacheTarget, DbStatus, KeyRange, KeyValue, SsTableId};
+use crate::types::{CacheTarget, DbStatus, KeyRange, KeyValue, SsTableId, WriteResult};
 use crate::validation::{validate_key, validate_key_value};
 use crate::write_batch::WriteBatch;
 use crate::write_handle::WriteHandle;
@@ -245,6 +245,24 @@ impl Db {
         )))
     }
 
+    /// Applies all operations in `batch` atomically using custom write options
+    /// and returns the assigned sequence number and creation timestamp.
+    ///
+    /// The provided batch is consumed and cannot be reused afterwards.
+    pub async fn write_with_options_result(
+        &self,
+        batch: Arc<WriteBatch>,
+        options: WriteOptions,
+    ) -> Result<WriteResult, Error> {
+        let batch = batch.take_for_write()?;
+        let options = options.into();
+        let handle = self.inner.write_with_options(batch, &options).await?;
+        Ok(WriteResult {
+            seqnum: handle.seqnum(),
+            create_ts: handle.create_ts(),
+        })
+    }
+
     /// Flushes the default storage layer.
     pub async fn flush(&self) -> Result<(), Error> {
         self.inner.flush().await.map_err(Into::into)
@@ -320,5 +338,52 @@ impl Db {
     pub async fn flush_cache_to_disk(&self) -> Result<(), Error> {
         self.inner.flush_cache_to_disk().await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::builder::DbBuilder;
+    use crate::config::WriteOptions;
+    use crate::object_store::ObjectStore;
+    use crate::write_batch::{PutEntry, WriteBatch};
+    use object_store::memory::InMemory;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn put_many_writes_all_entries() {
+        let object_store = Arc::new(ObjectStore {
+            inner: Arc::new(InMemory::new()),
+        });
+        let db = DbBuilder::new("put-many".to_owned(), object_store)
+            .build()
+            .await
+            .unwrap();
+
+        let batch = WriteBatch::new();
+        batch
+            .put_many(vec![
+                PutEntry {
+                    key: b"k1".to_vec(),
+                    value: b"v1".to_vec(),
+                },
+                PutEntry {
+                    key: b"k2".to_vec(),
+                    value: b"v2".to_vec(),
+                },
+            ])
+            .unwrap();
+
+        let result = db
+            .write_with_options_result(batch, WriteOptions::default())
+            .await
+            .unwrap();
+        assert!(result.seqnum > 0);
+
+        assert_eq!(db.get(b"k1".to_vec()).await.unwrap(), Some(b"v1".to_vec()));
+        assert_eq!(db.get(b"k2".to_vec()).await.unwrap(), Some(b"v2".to_vec()));
+
+        db.close().await.unwrap();
     }
 }

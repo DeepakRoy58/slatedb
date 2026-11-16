@@ -176,6 +176,15 @@ impl From<slatedb::KeyValue> for KeyValue {
     }
 }
 
+/// Sequence number and creation timestamp returned by a write.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct WriteResult {
+    /// Sequence number assigned to the write.
+    pub seqnum: u64,
+    /// Creation timestamp assigned to the write.
+    pub create_ts: i64,
+}
+
 /// Kind of row entry stored in WAL iteration results.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum RowEntryKind {
